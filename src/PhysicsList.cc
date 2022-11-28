@@ -1,0 +1,387 @@
+#include "globals.hh"
+#include "PhysicsList.hh"
+
+#include "G4ParticleDefinition.hh"
+#include "G4ParticleTypes.hh"
+#include "G4ParticleTable.hh"
+
+#include "G4SystemOfUnits.hh"
+
+#include "G4BosonConstructor.hh"
+#include "G4LeptonConstructor.hh"
+#include "G4MesonConstructor.hh"
+#include "G4BaryonConstructor.hh"
+#include "G4IonConstructor.hh"
+#include "G4ShortLivedConstructor.hh"
+
+#include "G4ProcessManager.hh"
+#include "G4ProcessTable.hh"
+
+#include "G4Cerenkov.hh"
+#include "G4Scintillation.hh"
+#include "G4OpAbsorption.hh"
+#include "G4OpRayleigh.hh"
+#include "G4OpMieHG.hh"
+#include "G4OpBoundaryProcess.hh"
+#include "G4OpWLS.hh"
+
+#include "NeutronHPphysics.hh"
+
+#include "G4LossTableManager.hh"
+#include "G4EmSaturation.hh"
+ 
+PhysicsList::PhysicsList() 
+ : G4VUserPhysicsList(),
+   fVerboseLebel(1), fMaxNumPhotonStep(20)
+{
+
+}
+
+PhysicsList::~PhysicsList() { }
+
+void PhysicsList::ConstructParticle()
+{
+
+  G4BosonConstructor bConstructor;
+  bConstructor.ConstructParticle();
+
+  G4LeptonConstructor lConstructor;
+  lConstructor.ConstructParticle();
+
+  G4MesonConstructor mConstructor;
+  mConstructor.ConstructParticle();
+
+  G4BaryonConstructor rConstructor;
+  rConstructor.ConstructParticle();
+
+  G4IonConstructor iConstructor;
+  iConstructor.ConstructParticle();
+  
+  G4ShortLivedConstructor pShortLivedConstructor;
+  pShortLivedConstructor.ConstructParticle();  
+}
+
+void PhysicsList::ConstructProcess()
+{
+  AddTransportation();
+  ConstructDecay();
+  ConstructEM();
+  ConstructOp();
+  ConstructNeutron();
+}
+
+#include "G4Decay.hh"
+
+void PhysicsList::ConstructDecay()
+{
+  // Add Decay Process
+  G4Decay* theDecayProcess = new G4Decay();
+  auto theParticleIterator=GetParticleIterator();
+  theParticleIterator->reset();
+  while( (*theParticleIterator)() ){
+    G4ParticleDefinition* particle = theParticleIterator->value();
+    G4ProcessManager* pmanager = particle->GetProcessManager();
+    if (theDecayProcess->IsApplicable(*particle)) {
+      pmanager ->AddProcess(theDecayProcess);
+      // set ordering for PostStepDoIt and AtRestDoIt
+      pmanager ->SetProcessOrdering(theDecayProcess, idxPostStep);
+      pmanager ->SetProcessOrdering(theDecayProcess, idxAtRest);
+    }
+  }
+}
+
+
+#include "G4HadronElasticProcess.hh"
+#include "G4ParticleHPElasticData.hh"
+#include "G4ParticleHPThermalScatteringData.hh"
+#include "G4ParticleHPElastic.hh"
+#include "G4ParticleHPThermalScattering.hh"
+
+#include "G4NeutronInelasticProcess.hh"
+#include "G4ParticleHPInelasticData.hh"
+#include "G4ParticleHPInelastic.hh"
+
+#include "G4HadronCaptureProcess.hh"
+#include "G4ParticleHPCaptureData.hh"
+#include "ArParticleHPCapture.hh"
+
+#include "G4HadronFissionProcess.hh"
+#include "G4ParticleHPFissionData.hh"
+#include "G4ParticleHPFission.hh"
+
+
+void PhysicsList::ConstructNeutron()
+{
+  G4ParticleDefinition* neutron = G4Neutron::Neutron();
+  G4ProcessManager* pManager = neutron->GetProcessManager();
+   
+  // delete all neutron processes if already registered
+  //
+  G4VProcess* process = 0;
+  process = pManager->GetProcess("hadElastic");
+  if (process) pManager->RemoveProcess(process);
+  //
+  process = pManager->GetProcess("neutronInelastic");
+  if (process) pManager->RemoveProcess(process);
+  //
+  process = pManager->GetProcess("nCapture");      
+  if (process) pManager->RemoveProcess(process);
+  //
+  process = pManager->GetProcess("nFission");      
+  if (process) pManager->RemoveProcess(process);      
+         
+  // (re) create process: elastic
+  //
+  G4HadronElasticProcess* process1 = new G4HadronElasticProcess();
+  pManager->AddDiscreteProcess(process1);
+  //
+  // model1a
+  G4ParticleHPElastic*  model1a = new G4ParticleHPElastic();
+  process1->RegisterMe(model1a);
+  process1->AddDataSet(new G4ParticleHPElasticData());
+  //
+  // model1b
+  if (fThermal) {
+    model1a->SetMinEnergy(4*eV);   
+   G4ParticleHPThermalScattering* model1b = new G4ParticleHPThermalScattering();
+    process1->RegisterMe(model1b);
+    process1->AddDataSet(new G4ParticleHPThermalScatteringData());
+  }
+   
+  // (re) create process: inelastic
+  //
+  G4NeutronInelasticProcess* process2 = new G4NeutronInelasticProcess();
+  pManager->AddDiscreteProcess(process2);   
+  //
+  // cross section data set
+  G4ParticleHPInelasticData* dataSet2 = new G4ParticleHPInelasticData();
+  process2->AddDataSet(dataSet2);                               
+  //
+  // models
+  G4ParticleHPInelastic* model2 = new G4ParticleHPInelastic();
+  process2->RegisterMe(model2);    
+
+  // (re) create process: nCapture   
+  //
+  G4HadronCaptureProcess* process3 = new G4HadronCaptureProcess();
+  pManager->AddDiscreteProcess(process3);    
+  //
+  // cross section data set
+  G4ParticleHPCaptureData* dataSet3 = new G4ParticleHPCaptureData();
+  process3->AddDataSet(dataSet3);
+  //
+  // models
+  //G4ParticleHPCapture* model3 = new G4ParticleHPCapture();
+  ArParticleHPCapture* model3 = new ArParticleHPCapture(); // Jingbo Wang, April 21, 2020
+  process3->RegisterMe(model3);
+   
+  // (re) create process: nFission   
+  //
+  G4HadronFissionProcess* process4 = new G4HadronFissionProcess();
+  pManager->AddDiscreteProcess(process4);
+  //
+  // cross section data set
+  G4ParticleHPFissionData* dataSet4 = new G4ParticleHPFissionData();
+  process4->AddDataSet(dataSet4);                               
+  //
+  // models
+  G4ParticleHPFission* model4 = new G4ParticleHPFission();
+  process4->RegisterMe(model4);
+}
+
+
+#include "PhysListEmLivermore.hh"
+
+// gamma
+
+#include "G4PhotoElectricEffect.hh"
+#include "G4LivermorePhotoElectricModel.hh"
+
+#include "G4ComptonScattering.hh"
+#include "G4LivermoreComptonModel.hh"
+
+#include "G4GammaConversion.hh"
+#include "G4LivermoreGammaConversionModel.hh"
+
+#include "G4RayleighScattering.hh" 
+#include "G4LivermoreRayleighModel.hh"
+
+// e-
+
+#include "G4eIonisation.hh"
+#include "G4LivermoreIonisationModel.hh"
+#include "G4UniversalFluctuation.hh"
+
+#include "G4eBremsstrahlung.hh"
+#include "G4LivermoreBremsstrahlungModel.hh"
+
+// e+
+
+#include "G4eplusAnnihilation.hh"
+
+// mu
+
+#include "G4MuIonisation.hh"
+#include "G4MuBremsstrahlung.hh"
+#include "G4MuPairProduction.hh"
+
+// hadrons, ions
+
+#include "G4hIonisation.hh"
+#include "G4ionIonisation.hh"
+
+
+void PhysicsList::ConstructEM()
+{
+  auto theParticleIterator=GetParticleIterator();
+  theParticleIterator->reset();
+  while( (*theParticleIterator)() ){
+    G4ParticleDefinition* particle = theParticleIterator->value();
+    G4ProcessManager* pmanager = particle->GetProcessManager();
+    G4String particleName = particle->GetParticleName();
+
+    G4double highEnergyLimit = 1*GeV;
+
+   if (particleName == "gamma") {
+      // gamma         
+
+      G4PhotoElectricEffect* phot = new G4PhotoElectricEffect();
+      G4LivermorePhotoElectricModel* 
+      photModel = new G4LivermorePhotoElectricModel();
+      photModel->SetHighEnergyLimit(highEnergyLimit);
+      phot->AddEmModel(0, photModel);
+      pmanager->AddDiscreteProcess(phot);
+
+      G4ComptonScattering* compt = new G4ComptonScattering();
+      G4LivermoreComptonModel* 
+      comptModel = new G4LivermoreComptonModel();
+      comptModel->SetHighEnergyLimit(highEnergyLimit);
+      compt->AddEmModel(0, comptModel);
+      pmanager->AddDiscreteProcess(compt);
+
+      G4GammaConversion* conv = new G4GammaConversion();
+      G4LivermoreGammaConversionModel* 
+      convModel = new G4LivermoreGammaConversionModel();
+      convModel->SetHighEnergyLimit(highEnergyLimit);
+      conv->AddEmModel(0, convModel);
+      pmanager->AddDiscreteProcess(conv);
+
+      G4RayleighScattering* rayl = new G4RayleighScattering();
+      G4LivermoreRayleighModel* 
+      raylModel = new G4LivermoreRayleighModel();
+      raylModel->SetHighEnergyLimit(highEnergyLimit);
+      rayl->AddEmModel(0, raylModel);
+      pmanager->AddDiscreteProcess(rayl);
+      
+    } else if (particleName == "e-") {
+      //electron
+
+      G4eIonisation* eIoni = new G4eIonisation();
+      G4LivermoreIonisationModel* 
+      eIoniModel = new G4LivermoreIonisationModel();
+      eIoniModel->SetHighEnergyLimit(highEnergyLimit); 
+      eIoni->AddEmModel(0, eIoniModel, new G4UniversalFluctuation() );
+      pmanager->AddProcess(eIoni,                   -1, 1, 1);
+      
+      G4eBremsstrahlung* eBrem = new G4eBremsstrahlung();
+      G4LivermoreBremsstrahlungModel* 
+      eBremModel = new G4LivermoreBremsstrahlungModel();
+      eBremModel->SetHighEnergyLimit(highEnergyLimit);
+      eBrem->AddEmModel(0, eBremModel);
+      pmanager->AddProcess(eBrem,                   -1, 2, 2);
+                  
+    } else if (particleName == "e+") {
+      //positron
+      pmanager->AddProcess(new G4eIonisation,       -1, 1, 1);
+      pmanager->AddProcess(new G4eBremsstrahlung,   -1, 2, 2);
+      pmanager->AddProcess(new G4eplusAnnihilation,  0,-1, 3);
+      
+    } else if( particleName == "mu+" || 
+               particleName == "mu-"    ) {
+      //muon  
+      pmanager->AddProcess(new G4MuIonisation,      -1, 1, 1);
+      pmanager->AddProcess(new G4MuBremsstrahlung,  -1, 2, 2);
+      pmanager->AddProcess(new G4MuPairProduction,  -1, 3, 3);       
+     
+    } else if( particleName == "alpha" || particleName == "GenericIon" ) { 
+      pmanager->AddProcess(new G4ionIonisation,     -1, 1, 1);
+
+    } else if ((!particle->IsShortLived()) &&
+               (particle->GetPDGCharge() != 0.0) && 
+               (particle->GetParticleName() != "chargedgeantino")) {
+      //all others charged particles except geantino
+      pmanager->AddProcess(new G4hIonisation,       -1, 1, 1);
+    }
+  }
+}
+
+#include "G4Threading.hh"
+
+void PhysicsList::ConstructOp()
+{
+  G4OpWLS* wlsProcess = new G4OpWLS();
+  G4Cerenkov* cerenkovProcess = new G4Cerenkov("Cerenkov");
+  cerenkovProcess->SetMaxNumPhotonsPerStep(fMaxNumPhotonStep);
+  cerenkovProcess->SetMaxBetaChangePerStep(10.0);
+  cerenkovProcess->SetTrackSecondariesFirst(true);
+  G4Scintillation* scintillationProcess = new G4Scintillation("Scintillation");
+  scintillationProcess->SetScintillationYieldFactor(1.);
+  scintillationProcess->SetTrackSecondariesFirst(true);
+  G4OpAbsorption* absorptionProcess = new G4OpAbsorption();
+  G4OpRayleigh* rayleighScatteringProcess = new G4OpRayleigh();
+  G4OpMieHG* mieHGScatteringProcess = new G4OpMieHG();
+  G4OpBoundaryProcess* boundaryProcess = new G4OpBoundaryProcess();
+  
+  if(!G4Threading::IsWorkerThread())
+  {
+    G4EmSaturation* emSaturation =
+              G4LossTableManager::Instance()->EmSaturation();
+      scintillationProcess->AddSaturation(emSaturation);
+  }
+
+  auto theParticleIterator=GetParticleIterator();
+  theParticleIterator->reset();
+  while( (*theParticleIterator)() ){
+    G4ParticleDefinition* particle = theParticleIterator->value();
+    G4ProcessManager* pmanager = particle->GetProcessManager();
+    G4String particleName = particle->GetParticleName();
+    if (cerenkovProcess->IsApplicable(*particle)) {
+      pmanager->AddProcess(cerenkovProcess);
+      pmanager->SetProcessOrdering(cerenkovProcess,idxPostStep);
+    }
+    if (scintillationProcess->IsApplicable(*particle)) {
+      pmanager->AddProcess(scintillationProcess);
+      pmanager->SetProcessOrderingToLast(scintillationProcess, idxAtRest);
+      pmanager->SetProcessOrderingToLast(scintillationProcess, idxPostStep);
+    }
+    if (particleName == "opticalphoton") {
+      G4cout << " AddDiscreteProcess to OpticalPhoton " << G4endl;
+      pmanager->AddDiscreteProcess(absorptionProcess);
+      pmanager->AddDiscreteProcess(rayleighScatteringProcess);
+      pmanager->AddDiscreteProcess(mieHGScatteringProcess);
+      pmanager->AddDiscreteProcess(boundaryProcess);
+      pmanager->AddDiscreteProcess(wlsProcess);
+    }
+  }
+}
+
+void PhysicsList::SetVerbose(G4int verbose)
+{
+  fVerboseLebel = verbose;
+}
+
+void PhysicsList::SetNbOfPhotonsCerenkov(G4int MaxNumber)
+{
+    fMaxNumPhotonStep = MaxNumber;
+}
+
+void PhysicsList::SetCuts()
+{
+  SetCutValue(1.*nm, "gamma");
+  SetCutValue(0.*eV, "neutron");
+  SetCutValue(1.*nm, "e-");
+  SetCutValue(1.*nm, "e+");
+
+  if (verboseLevel>0) DumpCutValuesTable();
+}
+
